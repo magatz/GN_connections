@@ -109,20 +109,32 @@ proc sgplot data=mycas.input_ds_5;
 run;
 
 proc partition data=mycas.input_ds_5 partind samppct=30 seed=17112003;
-	by _cluster_id_ tipologia ;
+	by  tipologia ;
 	output out=mycas.input_ds_6;
 run;
 
 
-
 proc regselect data=mycas.input_ds_6;
-/* 	partition role=_PartInd_(train='0'  validate='1');  */
+	partition role=_PartInd_(train='0'  validate='1'); 
 	class _CLUSTER_ID_ flag_condotte BIN_lunghezza_condotte diametro;
 	model Costo_totale=_CLUSTER_ID_ | flag_condotte | BIN_lunghezza_condotte | lunghezza_condotte | diametro @3 /;
 	selection method=FORWARD;
 	output out=mycas.regselect_out p=predicted /*lcl=lcl ucl=ucl lclm=lclm uclm=uclm*/ r=residual copyvars=(definizione_progetto costo_totale);
 	ods output FitStatistics =cost.regselect_fit;
 run;
+
+ods graphics on / width=1200 height=800;
+proc glmselect data=mycas.input_ds_6 plots(stepAxis=number)=(criterionPanel ASEPlot);
+	partition role=_PartInd_(train='0'  validate='1'); 
+	class _CLUSTER_ID_  BIN_lunghezza_condotte diametro;
+	model Costo_totale=_CLUSTER_ID_ |  BIN_lunghezza_condotte | lunghezza_condotte | diametro @2 /
+			 selection=elasticnet(choose = validate);
+	
+	output out=mycas.regselect_out p=predicted /*lcl=lcl ucl=ucl lclm=lclm uclm=uclm*/ r=residual ;
+	ods output FitStatistics =cost.regselect_fit;
+run;
+
+
 
 data mycas.mape (keep=definizione_progetto costo_totale  predicted  ape _partind_);
 	set mycas.regselect_out;
