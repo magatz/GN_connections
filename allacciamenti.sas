@@ -102,37 +102,70 @@ data mycas.input_ds_5;
 by definizione_progetto;
 run;
 
-
 /* plot natural clusters  */
 proc sgplot data=mycas.input_ds_5;
  scatter x=_dim_1_ y= _dim_2_ / group=_CLUSTER_ID_;
 run;
 
-proc partition data=mycas.input_ds_5 partind samppct=30 seed=17112003;
-	by  tipologia ;
+/* create partition fo GCV */
+proc partition data=mycas.input_ds_5 partind samppct=30 /*seed=17112003*/;
+	by  _cluster_id_ ;
 	output out=mycas.input_ds_6;
 run;
 
-
+/*
 proc regselect data=mycas.input_ds_6;
-	partition role=_PartInd_(train='0'  validate='1'); 
+
 	class _CLUSTER_ID_ flag_condotte BIN_lunghezza_condotte diametro;
 	model Costo_totale=_CLUSTER_ID_ | flag_condotte | BIN_lunghezza_condotte | lunghezza_condotte | diametro @3 /;
-	selection method=FORWARD;
-	output out=mycas.regselect_out p=predicted /*lcl=lcl ucl=ucl lclm=lclm uclm=uclm*/ r=residual copyvars=(definizione_progetto costo_totale);
+	selection method=stepwise;
+	output out=mycas.regselect_out p=predicted  r=residual copyvars=(definizione_progetto costo_totale);
 	ods output FitStatistics =cost.regselect_fit;
+run;
+*/
+
+%MACRO RUN_MODEL(method);
+
+	ods graphics on / width=1200 height=800;
+	proc glmselect data=mycas.input_ds_6 plots(stepAxis=number)=(criterionPanel ASEPlot) outdesign=mycas.design;
+		where _cluster_id_ ne 3;
+		partition role=_PartInd_(train='0'  validate='1'); 
+		class _CLUSTER_ID_  BIN_lunghezza_condotte diametro;
+		model Costo_totale=_CLUSTER_ID_ |  BIN_lunghezza_condotte | lunghezza_condotte | diametro @2 /
+				 selection=&method(choose = validate);
+		
+		output out=mycas.regselect_out p=predicted /*lcl=lcl ucl=ucl lclm=lclm uclm=uclm*/ r=residual ;
+		ods output FitStatistics =cost.regselect_fit;
+	run;
+	
+	data mycas.fit_&method;
+		length method $15;
+	 set cost.regselect_fit;
+	 method="&method";
+	run;
+
+%MEND;
+
+%RUN_MODEL(forward);
+%RUN_MODEL(backward);
+%RUN_MODEL(stepwise);
+%RUN_MODEL(lar);
+%RUN_MODEL(lasso);
+%RUN_MODEL(elasticnet);
+%RUN_MODEL(grouplasso);
+
+data mycas.sintesi;
+length method $15;
+	set mycas.fit_forward mycas.fit_backward mycas.fit_stepwise mycas.fit_lar 
+		mycas.fit_lasso mycas.fit_elasticnet mycas.fit_grouplasso;
+	where label1 in ("R-Square" "ASE (Train)" "ASE (Validate)");
+format nvalue1 commax14.4;
 run;
 
-ods graphics on / width=1200 height=800;
-proc glmselect data=mycas.input_ds_6 plots(stepAxis=number)=(criterionPanel ASEPlot);
-	partition role=_PartInd_(train='0'  validate='1'); 
-	class _CLUSTER_ID_  BIN_lunghezza_condotte diametro;
-	model Costo_totale=_CLUSTER_ID_ |  BIN_lunghezza_condotte | lunghezza_condotte | diametro @2 /
-			 selection=elasticnet(choose = validate);
-	
-	output out=mycas.regselect_out p=predicted /*lcl=lcl ucl=ucl lclm=lclm uclm=uclm*/ r=residual ;
-	ods output FitStatistics =cost.regselect_fit;
+proc sort data=mycas.sintesi(drop=cValue1);
+by label1 nvalue1;
 run;
+
 
 
 
@@ -177,11 +210,6 @@ proc sgplot data=MYCAS.ALLAC;
  scatter x=Totale_Lunghezza__m_ y=costo_totale;
  ellipse x=Totale_Lunghezza__m_ y=costo_totale;
 run;
-
-
-
-  
-
 
 
 
