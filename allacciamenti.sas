@@ -5,7 +5,7 @@ caslib _all_ assign;
 libname COST '/home/magatz/My Data';
 libname mycas cas caslib="CASUSER";
 
-ods graphics on /height=1000 width=2000 imagemap=on;
+ods graphics on /height=1000 width=1500 imagemap=on;
 
 data mycas.allac;
 	set cost.db_allac(drop=societa descrizione_societa macro_progetto);
@@ -14,6 +14,11 @@ data mycas.allac;
 		call missing(codice_metanodotto);
 	
 	if Definizione_progetto  in ("NR/15411" "NR/14187"  "NR/17467" ) then delete;
+/*
+	 where definizione_progetto not in ("NR/12243" "NR/05386" "NR/18317" "NR/18373" 
+		"NR/18272" "NR/14199" "NR/17309" "NR/05397" "NR/14342" "NR/18432" "NR/16255" 
+		"NR/05402" "NR/05399"  );
+*/
 
 run;
 
@@ -26,11 +31,7 @@ data mycas.input_ds_1 (rename=(Costruzione_0002=costo_costruzione
 		Data_E_E__Commessa=data_commessa Totale_Lunghezza__m_=lunghezza_condotte 
 		Diametro_n__turbo_Pr=diametro));
 	set mycas.allac;
-/*
-	 where definizione_progetto not in ("NR/12243" "NR/05386" "NR/18317" "NR/18373" 
-		"NR/18272" "NR/14199" "NR/17309" "NR/05397" "NR/14342" "NR/18432" "NR/16255" 
-		"NR/05402" "NR/05399"  );
-*/
+
 	keep Data_E_E__Commessa Tipologia Definizione_progetto Descrizione_progetto 
 		Regione_Prevalente Costo_totale Diametro_n__turbo_Pr 
 		Costo_costruzione_tubazione Costo_tubazione Costruzione_0002 
@@ -77,12 +78,16 @@ proc fedsql sessref=mysession;
 		A.regione_prevalente=b.regione_prevalente;
 	quit;
 
+proc casutil;
+    save casdata="input_ds_3" incaslib="casuser" outcaslib="casuser" replace
+	     casout="input_ds_3.sashdat";
+quit;
+
 	/* calcolo clusters  */
-proc kclus data=MYCAS.input_ds_3 distance=euclidean distancenom=binary 
-		noc=abc(minclusters=2) maxclusters=6;
-	input Costo_totale lunghezza_condotte costo_costruzione Costo_tubazione 
-		diametro Costo_costruzione_tubazione diametro frequenza / level=interval;
-	input tipologia bin_lunghezza_condotte / level=nominal;
+proc kclus data=MYCAS.input_ds_3 distance=MANHATTAN distancenom=globalfreq 
+		noc=abc(minclusters=2) maxclusters=6 standardize=std seed=2201969 ; 
+	input Costo_: lunghezza_condotte  frequenza  / level=interval;
+	input tipologia diametro BIN_lunghezza_condotte  / level=nominal;
 	score out=mycas.ds_cluster copyvars=(definizione_progetto);
 run;
 
@@ -109,9 +114,9 @@ run;
 
 
 /* verifica cluster naturali  */
-proc tsne data=mycas.input_ds_4 nDimensions=2;
-	autotune maxtime=3000 popsize=20 nparallel=18 EVALHISTORY=log;
-	input costo_: lunghezza_condotte frequenza diametro;
+proc tsne data=mycas.input_ds_4 nDimensions=2 /*perplexity=10 learningrate=944.882252 maxiters=1000*/; 
+	autotune maxtime=6000 popsize=20 nparallel=18 EVALHISTORY=log;
+	input costo_: lunghezza_condotte frequenza diametro BIN_lunghezza_condotte   ;
 	output out=mycas.tsne_out copyvars=(Definizione_progetto);
 run;
 
@@ -132,32 +137,33 @@ proc sgplot data=mycas.input_ds_5;
 run;
 
 /* create partition fo GCV */
-proc partition data=mycas.input_ds_5 partind samppct=30 seed=220870;
+proc partition data=mycas.input_ds_5 partind samppct=30 seed=22011969;
 	by _cluster_id_;
 	output out=mycas.input_ds_6;
 run;
 
-/*
-proc regselect data=mycas.input_ds_6;
+                                                                           
+proc casutil;
+    save casdata="input_ds_6" incaslib="casuser" outcaslib="casuser" replace
+	     casout="input_ds_6";
+quit;
 
-class _CLUSTER_ID_ flag_condotte BIN_lunghezza_condotte diametro;
-model Costo_totale=_CLUSTER_ID_ | flag_condotte | BIN_lunghezza_condotte | lunghezza_condotte | diametro @3 /;
-selection method=stepwise;
-output out=mycas.regselect_out p=predicted  r=residual copyvars=(definizione_progetto costo_totale);
-ods output FitStatistics =cost.regselect_fit;
-run;
-*/
+
 %MACRO RUN_MODEL(method);
 	
+	data tmp;
+		name='/home/magatz/My SAS/score_code_allacciamenti_'|| "&method" ||'.sas';
+		call symputx('namecode', name);
+	run;
 
-	proc glmselect data=mycas.input_ds_6 plots(stepAxis=number)=(criterionPanel 
-			ASEPlot) outdesign=mycas.design;
-/* 		where _cluster_id_ ne 3; */
+	proc glmselect data=mycas.input_ds_6 plots(stepAxis=number)=(ASEPlot) outdesign=mycas.design;
+
+		code file="&namecode";
 		partition role=_PartInd_(train='0' validate='1');
-		class _CLUSTER_ID_ BIN_lunghezza_condotte diametro;
-		model Costo_totale =_CLUSTER_ID_ |  BIN_lunghezza_condotte | lunghezza_condotte | diametro @2 
-			/ selection=&method(choose=validate);
-/* 		modelaverage details; */
+		class _CLUSTER_ID_ BIN_lunghezza_condotte diametro   ;
+		model Costo_totale =_CLUSTER_ID_ |  BIN_lunghezza_condotte | lunghezza_condotte | diametro  @2 
+			/ selection=&method(choose=validate) stop=validate ;
+/* 		modelaverage refit   ; */
 		output out=mycas.regselect_out 
 			p=predicted /*lcl=lcl ucl=ucl lclm=lclm uclm=uclm*/
 			r=residual;
@@ -182,13 +188,14 @@ run;
 		
 		scatter x=lunghezza_condotte y=predicted;
 		scatter x=lunghezza_condotte y=costo_totale;
+		reg x=lunghezza_condotte y=predicted / lineattrs=(color=red) group=_cluster_id_;
 	run;
 
 %MEND;
 
+%RUN_MODEL(stepwise);
 %RUN_MODEL(forward);
 %RUN_MODEL(backward);
-%RUN_MODEL(stepwise);
 %RUN_MODEL(lar);
 %RUN_MODEL(lasso);
 %RUN_MODEL(elasticnet);
@@ -246,7 +253,7 @@ proc univariate data=MYCAS.BIOMETANO;
 	where descrizione_progetto ne "All.to Bioman S.p.a Maniago (PN)";
 	id descrizione_progetto;
 	var Costo_totale Costo_tubazione;
-	histogram Costo_totale / exp(theta=25);
+	histogram Costo_totale / normal;
 	qqplot Costo_totale / exp(theta=25);
 	histogram Costo_tubazione / sb(theta=10 sigma=1350);
 run;
