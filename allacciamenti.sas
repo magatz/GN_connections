@@ -58,6 +58,10 @@ proc hpbin data=mycas.input_ds_1 numbin=10 bucket output=mycas.input_ds_1_bin;
 	ods output Mapping=mycas.bin_mapping;
 run;
 
+data cost.bin_mapping;
+ set mycas.bin_mapping;
+run;
+
 /* adding bins to inputds  */
 data mycas.input_ds_2;
 	merge mycas.input_ds_1 mycas.input_ds_1_bin;
@@ -84,8 +88,19 @@ proc casutil;
 quit;
 
 	/* calcolo clusters  */
-proc kclus data=MYCAS.input_ds_3 distance=MANHATTAN distancenom=globalfreq 
-		noc=abc(minclusters=2) maxclusters=6 standardize=std seed=2201969 ; 
+proc kclus data=MYCAS.input_ds_3
+		distance=manhattan 
+		distancenom=globalfreq 
+		noc=abc(
+			minclusters=2 
+			align=none 
+			criterion=firstpeak)
+		maxclusters=6 
+		standardize=std 
+		seed=2201969
+		maxiter=50 
+		outstat=mycas.clusters_stats 
+		KPROTOTYPEPARAMS=autogamma ; 
 	input Costo_: lunghezza_condotte  frequenza  / level=interval;
 	input tipologia diametro BIN_lunghezza_condotte  / level=nominal;
 	score out=mycas.ds_cluster copyvars=(definizione_progetto);
@@ -100,18 +115,18 @@ run;
 
 /* show cluster by lunghezza  */
 ods graphics on / width=1200 height=800;
+
 proc sgplot data=mycas.input_ds_4;
-by _cluster_id_;
- scatter x=lunghezza_condotte y=costo_totale;
+	by _cluster_id_;
+	scatter x=lunghezza_condotte y=costo_totale;
 run;
 
 /* show cluster data  */
 proc means data=mycas.input_ds_4 nway;
- class _cluster_id_;
-var lunghezza_condotte diametro ;
-output out=cost.rules;
-run; 
-
+	class _cluster_id_ ;
+	var lunghezza_condotte diametro ;
+	output out=cost.cluster_rules;
+run;
 
 /* verifica cluster naturali  */
 proc tsne data=mycas.input_ds_4 nDimensions=2 /*perplexity=10 learningrate=944.882252 maxiters=1000*/; 
@@ -127,9 +142,11 @@ data mycas.input_ds_5;
 	by definizione_progetto;
 run;
 
-data cost.input_ds_5;
+/*
+data cost.tsne_plot;
  set mycas.input_ds_5;
 run;
+*/
 
 /* plot natural clusters  */
 proc sgplot data=mycas.input_ds_5;
@@ -142,12 +159,12 @@ proc partition data=mycas.input_ds_5 partind samppct=30 seed=22011969;
 	output out=mycas.input_ds_6;
 run;
 
-                                                                           
+/*                                                                           
 proc casutil;
     save casdata="input_ds_6" incaslib="casuser" outcaslib="casuser" replace
 	     casout="input_ds_6";
 quit;
-
+*/
 
 %MACRO RUN_MODEL(method);
 	
@@ -183,9 +200,16 @@ quit;
 		method="&method";
 	run;
 
+	data mycas.parms_&method;
+		length method $15;
+		set cost.parms;
+		method="&method";
+	run;
+
 	title "Selection method: " "&method";
 	proc sgplot data=mycas.regselect_out;
-		
+		styleattrs datacolors=(green purple orangered);
+	  
 		scatter x=lunghezza_condotte y=predicted;
 		scatter x=lunghezza_condotte y=costo_totale;
 		reg x=lunghezza_condotte y=predicted / lineattrs=(color=red) group=_cluster_id_;
@@ -213,10 +237,42 @@ proc sort data=mycas.sintesi(drop=cValue1) out=cost.sintesi;
 	by label1 nvalue1;
 run;
 
-proc print data=cost.sintesi;
+proc sort data=cost.sintesi;
+ by method;
 run;
 
-/*
+proc transpose data=cost.sintesi out=cost.sintesi_t (drop=_name_);
+ by method;
+ id label1;
+var nvalue1;
+run;
+
+proc sort data=cost.sintesi_t;
+ by "ASE (Validate)"n;
+run;
+
+proc print data=cost.sintesi_t;
+
+run;
+
+data cost.fit_lar;
+	set mycas.fit_lar;
+run;
+
+data cost.output_lar;
+	set mycas.output_lar;
+run;
+
+data cost.parms_lar;
+	set mycas.parms_lar;
+run;
+
+
+data cost.regselect_out_lar;
+ set mycas.regselect_out;
+run;
+
+/*  
 data mycas.mape (keep=definizione_progetto costo_totale predicted ape 
 		_partind_ _cluster_id_);
 	set mycas.regselect_out;
